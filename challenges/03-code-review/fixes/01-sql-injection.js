@@ -1,8 +1,9 @@
 /**
- * Challenge 3 — Code review sample (intentionally flawed; do not use in production).
+ * Category: SQL injection — parameterized queries only (see flawed-approve-handler.js).
+ * Query result shape unchanged from sample (e.g. step[0]); fix under another category if needed.
  */
 
-// POST /api/workflow-instances/:id/steps/:stepId/approve  — find the issues!
+// POST /api/workflow-instances/:id/steps/:stepId/approve
 app.post('/api/workflow-instances/:id/steps/:stepId/approve', async (req, res) => {
   const { id, stepId } = req.params;
   const { user_id, comment } = req.body;
