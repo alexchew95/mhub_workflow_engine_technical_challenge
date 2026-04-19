@@ -1,11 +1,24 @@
 /**
- * Challenge 3 — Code review sample (intentionally flawed; do not use in production).
+ * Category: Missing input validation and error handling
  *
- * Addressed so far: SQL injection; inverted status check; race (lock_version);
- * authorisation; input validation & error handling (see below).
+ * Full handler matches flawed-approve-handler.js after fixes through category 5.
+ *
+ * Problems addressed:
+ * - Path params and body fields used without checks → NaN in SQL, crashes on step[0] when missing.
+ * - No proof step belongs to the instance in the URL → cross-instance step id abuse.
+ * - Wrong status returned with default 200 for errors.
+ * - Unhandled exceptions from db.query → opaque failures / leaked details if mishandled.
+ *
+ * Fixes:
+ * - Parse and validate instance id, step id, user_id, lock_version; 400 if invalid.
+ * - Optional comment normalized to string or null.
+ * - 404 if no step or step.instance_id does not match :id.
+ * - 409 for wrong step status and for optimistic-lock conflict.
+ * - try/catch: log server-side, generic 500 body (no stack trace).
+ * - Unknown approver_kind → 500 invalid configuration.
  */
 
-// POST /api/workflow-instances/:id/steps/:stepId/approve  — find the issues!
+// POST /api/workflow-instances/:id/steps/:stepId/approve
 app.post('/api/workflow-instances/:id/steps/:stepId/approve', async (req, res) => {
   try {
     const { id, stepId } = req.params;
