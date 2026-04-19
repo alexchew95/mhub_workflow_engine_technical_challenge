@@ -2,7 +2,9 @@
  * Challenge 3 — Code review sample (intentionally flawed; do not use in production).
  *
  * Addressed so far: SQL injection; inverted status; race (lock_version); authorisation;
- * validation & errors; HTTP status codes (see inline policy below).
+ * validation & errors; HTTP status codes; multi-statement transactional integrity (BEGIN/COMMIT).
+ *
+ * Requires `db` to be a pg Pool (or compatible): `db.connect()` → client with `.query` / `.release`.
  */
 
 // HTTP status policy for this route:
@@ -34,69 +36,90 @@ app.post('/api/workflow-instances/:id/steps/:stepId/approve', async (req, res) =
 
     const commentText = comment == null || comment === '' ? null : String(comment);
 
-    const step = await db.query(
-      `SELECT * FROM workflow_instance_steps WHERE id = $1`,
-      [stepIdNum]
-    );
+    const client = await db.connect();
+    try {
+      await client.query('BEGIN');
 
-    if (!step[0] || String(step[0].instance_id) !== String(instanceId)) {
-      return res.status(404).send({ error: 'Step not found' });
-    }
-
-    if (step[0].status != 'awaiting_action') {
-      return res.status(422).send({
-        error: 'This step is not awaiting approval in its current state',
-      });
-    }
-
-    const s = step[0];
-    if (s.approver_kind === 'USER') {
-      if (String(s.user_id) !== String(actorId)) {
-        return res.status(403).send({ error: 'You are not assigned to approve this step' });
-      }
-    } else if (s.approver_kind === 'ROLE') {
-      const membership = await db.query(
-        `SELECT 1 FROM user_roles WHERE user_id = $1 AND role_id = $2 LIMIT 1`,
-        [actorId, s.role_id]
+      const step = await client.query(
+        `SELECT * FROM workflow_instance_steps WHERE id = $1`,
+        [stepIdNum]
       );
-      if (membership.rowCount === 0) {
-        return res.status(403).send({ error: 'You are not assigned to approve this step' });
+
+      if (!step[0] || String(step[0].instance_id) !== String(instanceId)) {
+        await client.query('ROLLBACK');
+        return res.status(404).send({ error: 'Step not found' });
       }
-    } else {
-      return res.status(422).send({ error: 'Invalid step configuration' });
+
+      if (step[0].status != 'awaiting_action') {
+        await client.query('ROLLBACK');
+        return res.status(422).send({
+          error: 'This step is not awaiting approval in its current state',
+        });
+      }
+
+      const s = step[0];
+      if (s.approver_kind === 'USER') {
+        if (String(s.user_id) !== String(actorId)) {
+          await client.query('ROLLBACK');
+          return res.status(403).send({ error: 'You are not assigned to approve this step' });
+        }
+      } else if (s.approver_kind === 'ROLE') {
+        const membership = await client.query(
+          `SELECT 1 FROM user_roles WHERE user_id = $1 AND role_id = $2 LIMIT 1`,
+          [actorId, s.role_id]
+        );
+        if (membership.rowCount === 0) {
+          await client.query('ROLLBACK');
+          return res.status(403).send({ error: 'You are not assigned to approve this step' });
+        }
+      } else {
+        await client.query('ROLLBACK');
+        return res.status(422).send({ error: 'Invalid step configuration' });
+      }
+
+      const updated = await client.query(
+        `UPDATE workflow_instance_steps SET status = 'approved', actioned_by = $1,
+         comment = $2, actioned_at = NOW(), lock_version = lock_version + 1
+         WHERE id = $3 AND status = 'awaiting_action' AND lock_version = $4`,
+        [actorId, commentText, stepIdNum, lockVer]
+      );
+
+      if (updated.rowCount === 0) {
+        await client.query('ROLLBACK');
+        return res.status(409).send({
+          error: 'This step was already completed by another approver; refresh and try again.',
+        });
+      }
+
+      const nextStep = await client.query(
+        `SELECT * FROM workflow_instance_steps WHERE instance_id = $1
+         AND sequence > $2 ORDER BY sequence ASC LIMIT 1`,
+        [instanceId, step[0].sequence]
+      );
+
+      if (nextStep.length > 0) {
+        await client.query(`UPDATE workflow_instance_steps SET status = 'awaiting_action'
+          WHERE id = $1`,
+          [nextStep[0].id]);
+      } else {
+        await client.query(`UPDATE workflow_instances SET status = 'approved' WHERE id = $1`, [
+          instanceId,
+        ]);
+        // TODO: trigger post-approval callback
+      }
+
+      await client.query('COMMIT');
+      return res.status(200).send({ success: true });
+    } catch (err) {
+      try {
+        await client.query('ROLLBACK');
+      } catch (_) {
+        /* ignore */
+      }
+      throw err;
+    } finally {
+      client.release();
     }
-
-    const updated = await db.query(
-      `UPDATE workflow_instance_steps SET status = 'approved', actioned_by = $1,
-       comment = $2, actioned_at = NOW(), lock_version = lock_version + 1
-       WHERE id = $3 AND status = 'awaiting_action' AND lock_version = $4`,
-      [actorId, commentText, stepIdNum, lockVer]
-    );
-
-    if (updated.rowCount === 0) {
-      return res.status(409).send({
-        error: 'This step was already completed by another approver; refresh and try again.',
-      });
-    }
-
-    const nextStep = await db.query(
-      `SELECT * FROM workflow_instance_steps WHERE instance_id = $1
-       AND sequence > $2 ORDER BY sequence ASC LIMIT 1`,
-      [instanceId, step[0].sequence]
-    );
-
-    if (nextStep.length > 0) {
-      await db.query(`UPDATE workflow_instance_steps SET status = 'awaiting_action'
-        WHERE id = $1`,
-        [nextStep[0].id]);
-    } else {
-      await db.query(`UPDATE workflow_instances SET status = 'approved' WHERE id = $1`, [
-        instanceId,
-      ]);
-      // TODO: trigger post-approval callback
-    }
-
-    return res.status(200).send({ success: true });
   } catch (err) {
     console.error(err);
     return res.status(500).send({ error: 'Internal server error' });
