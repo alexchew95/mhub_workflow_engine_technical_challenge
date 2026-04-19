@@ -111,3 +111,44 @@ stateDiagram-v2
 ## Platform tables
 
 `user_id`, `role_id`, `actor_user_id`, `initiated_by` are `BIGINT` placeholders; add FKs to `users` and `roles` when available.
+
+
+---
+
+# Part 2: REST API (Fastify)
+
+Implementation: TypeScript + Fastify + `pg`. Run `npm install`, apply migrations `001` and `002`, set `DATABASE_URL`, then `npm run dev`.
+
+## Concurrency
+
+Approvers send `lockVersion` from the inbox or instance detail response. The service updates a step only if `status = awaiting_action` **and** `lock_version` matches, then increments `lock_version`. If zero rows are updated, the API returns **409** with code `STEP_CONCURRENCY_CONFLICT` (two role members submitted at the same time; one wins).
+
+## Domain callbacks (side effects)
+
+Register handlers in `src/index.ts` via `registerOnFinalApproval` / `registerOnRejected`. They run **after** the database transaction commits. Example: on `booking.cancellation_requested` final approval, update booking and unit; on rejection, notify `initiatedBy`.
+
+## Endpoints
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| POST | `/api/v1/workflow/templates` | Create template + steps. Body: `name`, `description?`, `eventCode`, `activate` (boolean), `steps[]` (`sequence`, `approverKind`, `userId?`, `roleId?`). **409** `TEMPLATE_EVENT_CONFLICT` if `activate` and event already has an active template. |
+| GET | `/api/v1/workflow/templates/:templateId` | Full template + steps. |
+| PATCH | `/api/v1/workflow/templates/:templateId` | Update `name`, `description`, and/or replace `steps`. **409** `TEMPLATE_HAS_RUNNING_INSTANCES` if any instance is `pending` or `in_progress`. |
+| POST | `/api/v1/workflow/templates/:templateId/activation` | Body: `{ "active": boolean }`. Activating publishes if needed and checks no other active template for the event. **409** on conflict. |
+| POST | `/api/v1/workflow/instances` | Trigger workflow. Body: `eventCode`, `entityType`, `entityId`, `initiatedBy`. **404** `NO_ACTIVE_TEMPLATE`. **409** `INSTANCE_ENTITY_CONFLICT` with `details.existingInstanceId` if an open instance exists for the entity. |
+| GET | `/api/v1/workflow/instances/:instanceId` | Instance + steps + action history (audit). |
+| GET | `/api/v1/workflow/inbox?userId=&roleIds=` | Pending steps for approver. `roleIds` optional, comma-separated (e.g. `2,3`). |
+| POST | `/api/v1/workflow/instance-steps/:stepId/approve` | Body: `actorUserId`, `lockVersion`, `comment?`, `roleIds?` (array or comma string of roles the actor holds). **403** if not assignee. **409** if step not `awaiting_action` or concurrency lost. **204** on success. |
+| POST | `/api/v1/workflow/instance-steps/:stepId/reject` | Body: `actorUserId`, `lockVersion`, `comment` (required), `roleIds?`. Same errors. **400** if comment empty. |
+
+## HTTP status summary
+
+- **201** create resource  
+- **204** success, no body  
+- **400** validation (e.g. reject without comment)  
+- **403** not an assignee  
+- **404** not found / no active template / unknown event  
+- **409** business conflict (template/event, open instance, wrong step state, concurrency)  
+- **500** unexpected error  
+
+Error body: `{ "error": { "code", "message", "details?" } }`.
