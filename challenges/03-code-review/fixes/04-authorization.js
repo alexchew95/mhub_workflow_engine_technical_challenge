@@ -1,11 +1,19 @@
 /**
- * Challenge 3 — Code review sample (intentionally flawed; do not use in production).
+ * Category: Missing authorisation — should any user be able to approve any step?
  *
- * Addressed so far: SQL injection (parameterized queries); inverted status check;
- * race (optimistic lock on lock_version); authorisation (assignee only).
+ * Problem: trusting `user_id` from the body lets a caller approve as anyone, and does not enforce
+ *          that the actor is actually the assignee (direct user) or a member of the assignee role.
+ *
+ * Fix:
+ * - For USER steps: require body user_id to match the step's assigned user_id.
+ * - For ROLE steps: require a row in user_roles (or equivalent) linking user_id to step.role_id.
+ * - Return 403 when not an assignee (do not leak whether the step exists — optional hardening).
+ *
+ * Assumes columns: approver_kind, user_id, role_id on workflow_instance_steps, and table user_roles(user_id, role_id).
+ *
+ * Prior fixes: parameterized SQL; status check; lock_version race handling.
  */
 
-// POST /api/workflow-instances/:id/steps/:stepId/approve  — find the issues!
 app.post('/api/workflow-instances/:id/steps/:stepId/approve', async (req, res) => {
   const { id, stepId } = req.params;
   const { user_id, comment, lock_version } = req.body;
