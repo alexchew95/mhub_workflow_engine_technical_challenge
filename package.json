@@ -1,0 +1,7 @@
+{
+  "name": "mhub",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Property developer sales lifecycle platform — workflow module",
+  "type": "module"
+}
