@@ -1,11 +1,20 @@
 /**
- * Challenge 3 — Code review sample (intentionally flawed; do not use in production).
+ * Category: Race condition — two approvers on the same step at once
  *
- * Addressed so far: SQL injection (parameterized queries); inverted status check;
- * race between two approvers (optimistic lock on lock_version).
+ * Problem: two requests can both pass a status check, then both run UPDATE; both "succeed"
+ *          or you double-advance the workflow unless the database enforces a single winner.
+ *
+ * Fix (optimistic concurrency):
+ * - Store lock_version (or similar) on the step row; client sends the version it read.
+ * - UPDATE ... WHERE id = ? AND status = 'awaiting_action' AND lock_version = ?
+ *   SET ..., lock_version = lock_version + 1
+ * - If rowCount === 0, another transaction won — return 409 with a clear message.
+ *
+ * Requires: lock_version column on workflow_instance_steps (integer, default 1).
+ *
+ * Prior fixes included: parameterized queries; status != 'awaiting_action' guard.
  */
 
-// POST /api/workflow-instances/:id/steps/:stepId/approve  — find the issues!
 app.post('/api/workflow-instances/:id/steps/:stepId/approve', async (req, res) => {
   const { id, stepId } = req.params;
   const { user_id, comment, lock_version } = req.body;
