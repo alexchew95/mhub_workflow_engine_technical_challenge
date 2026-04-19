@@ -1,9 +1,18 @@
 /**
  * Challenge 3 — Code review sample (intentionally flawed; do not use in production).
  *
- * Addressed so far: SQL injection; inverted status check; race (lock_version);
- * authorisation; input validation & error handling (see below).
+ * Addressed so far: SQL injection; inverted status; race (lock_version); authorisation;
+ * validation & errors; HTTP status codes (see inline policy below).
  */
+
+// HTTP status policy for this route:
+// - 200 OK           — approval applied, body { success: true }
+// - 400 Bad Request  — malformed ids or body (cannot parse / missing required fields)
+// - 403 Forbidden    — authenticated/identified user is not an assignee for this step
+// - 404 Not Found    — no such step, or step does not belong to this instance (same message)
+// - 409 Conflict     — optimistic lock lost (another approver committed first)
+// - 422 Unprocessable Entity — step exists but is not in a state that allows approval (or bad step data)
+// - 500 Internal Server Error — unexpected failure (logged); never leak stack to client
 
 // POST /api/workflow-instances/:id/steps/:stepId/approve  — find the issues!
 app.post('/api/workflow-instances/:id/steps/:stepId/approve', async (req, res) => {
@@ -35,7 +44,9 @@ app.post('/api/workflow-instances/:id/steps/:stepId/approve', async (req, res) =
     }
 
     if (step[0].status != 'awaiting_action') {
-      return res.status(409).send({ error: 'step not actionable' });
+      return res.status(422).send({
+        error: 'This step is not awaiting approval in its current state',
+      });
     }
 
     const s = step[0];
@@ -52,7 +63,7 @@ app.post('/api/workflow-instances/:id/steps/:stepId/approve', async (req, res) =
         return res.status(403).send({ error: 'You are not assigned to approve this step' });
       }
     } else {
-      return res.status(500).send({ error: 'Invalid step configuration' });
+      return res.status(422).send({ error: 'Invalid step configuration' });
     }
 
     const updated = await db.query(
@@ -85,7 +96,7 @@ app.post('/api/workflow-instances/:id/steps/:stepId/approve', async (req, res) =
       // TODO: trigger post-approval callback
     }
 
-    return res.send({ success: true });
+    return res.status(200).send({ success: true });
   } catch (err) {
     console.error(err);
     return res.status(500).send({ error: 'Internal server error' });
