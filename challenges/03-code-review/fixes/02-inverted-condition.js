@@ -1,10 +1,14 @@
 /**
- * Challenge 3 — Code review sample (intentionally flawed; do not use in production).
+ * Category: Inverted condition logic
  *
- * Addressed so far: SQL injection (parameterized queries); inverted status check (see below).
+ * Bug: the original checked `if (status == 'awaiting_action')` and then returned "not actionable".
+ *      That rejects exactly when the step IS ready for approval — the opposite of what you want.
+ *
+ * Fix: reject when status is NOT `awaiting_action` (only then is the step not actionable).
+ *
+ * (SQL injection fix from category 1 is included; other issues may remain.)
  */
 
-// POST /api/workflow-instances/:id/steps/:stepId/approve  — find the issues!
 app.post('/api/workflow-instances/:id/steps/:stepId/approve', async (req, res) => {
   const { id, stepId } = req.params;
   const { user_id, comment } = req.body;
