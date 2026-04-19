@@ -1,11 +1,20 @@
-/**
- * Domain types for §1.1 Workflow Template Configuration.
- * Aligns with database/migrations/001_workflow_template_configuration.sql
- */
-
 export type WorkflowTemplateStatus = "DRAFT" | "PUBLISHED" | "RETIRED";
-
 export type ApproverKind = "USER" | "ROLE";
+
+export type WorkflowInstanceStatus =
+  | "pending"
+  | "in_progress"
+  | "approved"
+  | "rejected"
+  | "cancelled";
+
+export type WorkflowInstanceStepStatus =
+  | "pending"
+  | "awaiting_action"
+  | "approved"
+  | "rejected";
+
+export type WorkflowInstanceDecision = "approve" | "reject";
 
 export interface WorkflowEvent {
   id: number;
@@ -23,7 +32,6 @@ export interface WorkflowTemplate {
   eventId: number;
   version: number;
   status: WorkflowTemplateStatus;
-  /** When true with status PUBLISHED, DB enforces one row per event_id */
   isActive: boolean;
   createdAt: Date;
   updatedAt: Date;
@@ -32,7 +40,6 @@ export interface WorkflowTemplate {
 export interface WorkflowTemplateStep {
   id: number;
   templateId: number;
-  /** 1-based order within the template */
   sequence: number;
   approverKind: ApproverKind;
   userId: number | null;
@@ -41,7 +48,39 @@ export interface WorkflowTemplateStep {
   updatedAt: Date;
 }
 
-/** Input shape for creating/updating template steps in admin UI */
-export type WorkflowTemplateStepInput =
-  | { sequence: number; approverKind: "USER"; userId: number }
-  | { sequence: number; approverKind: "ROLE"; roleId: number };
+export interface WorkflowInstance {
+  id: number;
+  templateId: number;
+  templateVersion: number;
+  eventId: number;
+  entityType: string;
+  entityId: string;
+  initiatedBy: number;
+  status: WorkflowInstanceStatus;
+  currentStepSequence: number | null;
+  createdAt: Date;
+  updatedAt: Date;
+  completedAt: Date | null;
+}
+
+export interface WorkflowInstanceStep {
+  id: number;
+  instanceId: number;
+  sequence: number;
+  approverKind: ApproverKind;
+  userId: number | null;
+  roleId: number | null;
+  status: WorkflowInstanceStepStatus;
+  lockVersion: number;
+  startedAt: Date | null;
+  completedAt: Date | null;
+}
+
+export interface WorkflowInstanceAction {
+  id: number;
+  instanceStepId: number;
+  actorUserId: number;
+  decision: WorkflowInstanceDecision;
+  comment: string | null;
+  actedAt: Date;
+}
